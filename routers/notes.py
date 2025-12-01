@@ -2,8 +2,12 @@ from fastapi import APIRouter, Depends, HTTPException, status, Path
 from database import get_async_db
 # from sqlalchemy.orm import Session
 from models import NotesDisplayModel, NotesModel, NotesUpdateModel
-from typing import List
+from routers.auth import get_current_active_user
+
+from typing import List, Annotated
 from database_models import Note
+from database_models import User as UserModel
+
 
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,14 +25,16 @@ async def get_note_from_db(id: int, db: AsyncSession):
 
 
 @api.get("/", response_model=List[NotesDisplayModel])
-async def get_all_notes(db: AsyncSession = Depends(get_async_db)):
+async def get_all_notes(db : Annotated[AsyncSession, Depends(get_async_db)],
+                         current_user: Annotated[UserModel, Depends(get_current_active_user)]):
     items = await db.execute(select(Note))
     return items.scalars().all()
 
     
 
 @api.get("/{id}", response_model = NotesDisplayModel)
-async def get_note(id : int = Path(..., ge=1, description="Note id") , db: AsyncSession = Depends(get_async_db)):
+async def get_note(id : Annotated[ int , Path(..., ge=1, description="Note id")] ,db : Annotated[AsyncSession, Depends(get_async_db)],
+                         current_user: Annotated[UserModel, Depends(get_current_active_user)]):
     result = await db.execute(
         select(Note).where(Note.id == id)
     )
@@ -40,9 +46,10 @@ async def get_note(id : int = Path(..., ge=1, description="Note id") , db: Async
 
 
 @api.post("/", response_model=NotesDisplayModel, status_code=status.HTTP_201_CREATED)
-async def app_note(input_note :NotesModel ,  db: AsyncSession = Depends(get_async_db)):
+async def app_note(input_note :NotesModel ,  db : Annotated[AsyncSession, Depends(get_async_db)],
+                         current_user: Annotated[UserModel, Depends(get_current_active_user)]):
     id = input_note.id
-    exists = await get_note_from_db(id)
+    exists = await get_note_from_db(id, db)
     if exists:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Data already present for id : {id}")
     else:
@@ -54,9 +61,9 @@ async def app_note(input_note :NotesModel ,  db: AsyncSession = Depends(get_asyn
 
 
 @api.put("/{id}",response_model=NotesDisplayModel, status_code=status.HTTP_202_ACCEPTED)
-async def update_note(id : int = Path(..., ge=1), input_note : NotesUpdateModel = ..., db: AsyncSession = Depends(get_async_db) ):
-    id = input_note.id
-    exists = await get_note_from_db(id)
+async def update_note(id : Annotated[int , Path(..., ge=1)], input_note : Annotated[ NotesUpdateModel ,...], db : Annotated[AsyncSession, Depends(get_async_db)],
+                         current_user: Annotated[UserModel, Depends(get_current_active_user)] ):
+    exists = await get_note_from_db(id, db)
     if not exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="No record found for given id, Failed to update")
     
@@ -72,8 +79,9 @@ async def update_note(id : int = Path(..., ge=1), input_note : NotesUpdateModel 
 
 
 @api.delete("/{id}",status_code=status.HTTP_204_NO_CONTENT)
-async def delete_note(id: int, db: AsyncSession = Depends(get_async_db)):
-    existing_entry = await get_note_from_db(id)
+async def delete_note(id: int, db : Annotated[AsyncSession, Depends(get_async_db)],
+                         current_user: Annotated[UserModel, Depends(get_current_active_user)]):
+    existing_entry = await get_note_from_db(id, db)
     if not existing_entry:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
