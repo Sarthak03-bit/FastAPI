@@ -27,7 +27,7 @@ async def get_note_from_db(id: int, db: AsyncSession):
 @api.get("/", response_model=List[NotesDisplayModel])
 async def get_all_notes(db : Annotated[AsyncSession, Depends(get_async_db)],
                          current_user: Annotated[UserModel, Depends(get_current_active_user)]):
-    items = await db.execute(select(Note))
+    items = await db.execute(select(Note).where(Note.user_id == current_user.id))
     return items.scalars().all()
 
     
@@ -36,7 +36,8 @@ async def get_all_notes(db : Annotated[AsyncSession, Depends(get_async_db)],
 async def get_note(id : Annotated[ int , Path(..., ge=1, description="Note id")] ,db : Annotated[AsyncSession, Depends(get_async_db)],
                          current_user: Annotated[UserModel, Depends(get_current_active_user)]):
     result = await db.execute(
-        select(Note).where(Note.id == id)
+        select(Note).where(Note.id == id,
+        Note.user_id == current_user.id)
     )
     note = result.scalar_one_or_none()
     if not note:
@@ -44,16 +45,29 @@ async def get_note(id : Annotated[ int , Path(..., ge=1, description="Note id")]
     return note
 
 
-
 @api.post("/", response_model=NotesDisplayModel, status_code=status.HTTP_201_CREATED)
-async def app_note(input_note :NotesModel ,  db : Annotated[AsyncSession, Depends(get_async_db)],
+async def add_note(input_note :NotesModel ,  db : Annotated[AsyncSession, Depends(get_async_db)],
                          current_user: Annotated[UserModel, Depends(get_current_active_user)]):
-    id = input_note.id
-    exists = await get_note_from_db(id, db)
-    if exists:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Data already present for id : {id}")
-    else:
-        new_note = Note(**input_note.model_dump())
+        
+        result = await db.execute(
+            select(Note).where(
+                Note.heading == input_note.heading,
+                Note.user_id == current_user.id
+            )
+        )
+        exists = result.scalar_one_or_none()
+
+        if exists:
+            raise HTTPException(
+                status_code=409, 
+                detail="Note already exists for this user"
+            )
+
+        new_note = Note(
+            heading=input_note.heading,
+            pointers=input_note.pointers,
+            user_id=current_user.id
+        )
         db.add(new_note)
         await db.commit()
         await db.refresh(new_note)
@@ -66,15 +80,16 @@ async def update_note(id : Annotated[int , Path(..., ge=1)], input_note : Annota
     exists = await get_note_from_db(id, db)
     if not exists:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="No record found for given id, Failed to update")
-    
-    update_data = input_note.model_dump(exclude_unset=True)
-    for field, value in update_data.items():
-        setattr(exists, field, value)
+    if exists.user_id == current_user.id:
+        update_data = input_note.model_dump(exclude_unset=True)
+        for field, value in update_data.items():
+            setattr(exists, field, value)
 
-    await db.commit()
-    await db.refresh(exists)
+        await db.commit()
+        await db.refresh(exists)
 
-    return exists 
+        return exists
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="No record found for given id, Failed to update")
 
 
 
@@ -87,9 +102,13 @@ async def delete_note(id: int, db : Annotated[AsyncSession, Depends(get_async_db
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No record found for given id, Failed to delete",
         )
+    if existing_entry.user_id == current_user.id:
+        await db.delete(existing_entry)
+        await db.commit()
 
-    await db.delete(existing_entry)
-    await db.commit()
-
-    return {"detail": f"Note with id {id} deleted successfully"}
+        return {"detail": f"Note with id {id} deleted successfully"}
+    raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No record found for given id, Failed to delete",
+        )
 
